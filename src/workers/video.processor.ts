@@ -229,6 +229,7 @@ export const createVideoProcessor = (redisClient: Redis) => {
 
 export const createDrmVideoProcessor = (redisClient: Redis) => {
   console.log(` IN DRM_PROCESSOR Creating DRM video processor...`);
+  console.log()
   return async (job: Job<TranscodeJobPayload>, token?: string) => {
     const { lessonId, tenantId, s3Key, drmKeyId, contentKey } = job.data;
 

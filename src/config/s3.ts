@@ -2,6 +2,9 @@ import { S3Client } from '@aws-sdk/client-s3';
 import 'dotenv/config';
 
 console.log("In S3")
+console.log("AWS Access Key ID:", process.env.AWS_ACCESS_KEY_ID!)
+console.log("AWS Secret Access Key:", process.env.AWS_SECRET_ACCESS_KEY!)
+
 export const s3Client = new S3Client({
   region: process.env.AWS_REGION || 'us-east-1',
   credentials: {
@@ -11,4 +14,4 @@ export const s3Client = new S3Client({
 });
 
 
-export const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'lms-videos-2026';
+export const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'lms-videos2026';
