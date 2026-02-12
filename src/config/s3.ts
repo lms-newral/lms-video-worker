@@ -1,5 +1,7 @@
 import { S3Client } from '@aws-sdk/client-s3';
-import 'dotenv/config';
+import dotenv from "dotenv"
+
+dotenv.config();
 
 console.log("In S3")
 console.log("AWS Access Key ID:", process.env.AWS_ACCESS_KEY_ID!)
