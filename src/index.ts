@@ -50,20 +50,22 @@ const mainProcessor = async (job: Job<TranscodeJobPayload>, token?: string) => {
 const worker = new Worker('video-transcoding', mainProcessor, {
   connection, 
   concurrency: 1,
+  lockDuration: 120000, // 2 minutes lock duration to prevent multiple workers from processing the same job
 });
 
 // Create Queue instance to check job counts 
 const queue = new Queue('video-transcoding', { connection });
 
 worker.on("ready", () => {
-  console.log(" Worker is ready and listening for jobs");
+  console.log("✅ Worker is ready and listening for jobs");
 });
 worker.on("failed", (job, err) => {
-  console.error(` Job ${job?.id} failed:`, err.message);
+  console.error(`❌ Job ${job?.id} failed:`, err.message);
 });
 worker.on("completed", (job) => {
-  console.log(` Job ${job.id} completed`);
+  console.log(`✅ Job ${job.id} completed`);
 });
+
 worker.on("drained", async () => {
   // Check if there are delayed jobs before shutting down
   const delayedCount = await queue.getDelayedCount();
