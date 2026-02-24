@@ -34,6 +34,22 @@ const getDuration = (filePath: string): Promise<number> => {
   });
 };
 
+// Helper to check if video has audio stream
+const hasAudioStream = (filePath: string): Promise<boolean> => {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      const hasAudio = metadata.streams?.some(
+        (stream: any) => stream.codec_type === "audio"
+      ) || false;
+      resolve(hasAudio);
+    });
+  });
+};
+
 // Helper: Retry function with exponential backoff for network calls
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -293,6 +309,11 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
       const duration = await getDuration(inputPath);
 
       console.log(`[${lessonId}] Stage 1: Transcoding Video & Audio to fMP4 in Parallel...`);
+      
+      // Check if video has audio stream
+      const videoHasAudio = await hasAudioStream(inputPath);
+      console.log(`[${lessonId}] Video has audio: ${videoHasAudio}`);
+
       const resolutions = [
         { name: "1080p", size: "1920x1080", bitrate: "5000k" },
         { name: "720p", size: "1280x720", bitrate: "2800k" },
@@ -320,19 +341,40 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
         });
       });
 
+      // Only process audio if it exists, otherwise create silent audio
       const audioPromise = new Promise<void>((resolve, reject) => {
-        ffmpeg(inputPath)
-          .outputOptions([
-            "-threads 2",
-            "-vn", 
-            "-c:a aac",
-            "-b:a 128k",
-            "-movflags frag_keyframe+empty_moov+default_base_moof"
-          ])
-          .output(`${outputDir}/audio_raw.mp4`)
-          .on("end", () => resolve())
-          .on("error", reject)
-          .run();
+        if (videoHasAudio) {
+          // Extract existing audio
+          ffmpeg(inputPath)
+            .outputOptions([
+              "-threads 2",
+              "-vn", 
+              "-c:a aac",
+              "-b:a 128k",
+              "-movflags frag_keyframe+empty_moov+default_base_moof"
+            ])
+            .output(`${outputDir}/audio_raw.mp4`)
+            .on("end", () => resolve())
+            .on("error", reject)
+            .run();
+        } else {
+          // Create silent audio track (5 seconds of silence)
+          ffmpeg()
+            .inputOptions([
+              "-f lavfi",
+              "-i anullsrc=r=44100:cl=mono",
+              "-t 0.1" // Small duration, will be extended by packaging
+            ])
+            .outputOptions([
+              "-c:a aac",
+              "-b:a 128k",
+              "-movflags frag_keyframe+empty_moov+default_base_moof"
+            ])
+            .output(`${outputDir}/audio_raw.mp4`)
+            .on("end", () => resolve())
+            .on("error", reject)
+            .run();
+        }
       });
 
       await Promise.all([...videoPromises, audioPromise]);
