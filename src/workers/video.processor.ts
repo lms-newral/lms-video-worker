@@ -358,22 +358,11 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
             .on("error", reject)
             .run();
         } else {
-          // Create silent audio track (5 seconds of silence)
-          ffmpeg()
-            .inputOptions([
-              "-f lavfi",
-              "-i anullsrc=r=44100:cl=mono",
-              "-t 0.1" // Small duration, will be extended by packaging
-            ])
-            .outputOptions([
-              "-c:a aac",
-              "-b:a 128k",
-              "-movflags frag_keyframe+empty_moov+default_base_moof"
-            ])
-            .output(`${outputDir}/audio_raw.mp4`)
-            .on("end", () => resolve())
-            .on("error", reject)
-            .run();
+          // Create silent audio track using ffmpeg directly
+          const silentAudioCmd = `ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 0.1 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof "${outputDir}/audio_raw.mp4"`;
+          execPromise(silentAudioCmd)
+            .then(() => resolve())
+            .catch(reject);
         }
       });
 
