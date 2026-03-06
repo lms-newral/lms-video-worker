@@ -42,9 +42,10 @@ const hasAudioStream = (filePath: string): Promise<boolean> => {
         reject(err);
         return;
       }
-      const hasAudio = metadata.streams?.some(
-        (stream: any) => stream.codec_type === "audio"
-      ) || false;
+      const hasAudio =
+        metadata.streams?.some(
+          (stream: any) => stream.codec_type === "audio",
+        ) || false;
       resolve(hasAudio);
     });
   });
@@ -55,7 +56,7 @@ async function withRetry<T>(
   fn: () => Promise<T>,
   retries: number = 3,
   delay: number = 1000,
-  label: string = "operation"
+  label: string = "operation",
 ): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -75,7 +76,7 @@ async function withRetry<T>(
 
       const waitTime = delay * Math.pow(2, attempt - 1);
       console.log(
-        `[${label}] Attempt ${attempt} failed: ${error.message}. Retrying in ${waitTime}ms...`
+        `[${label}] Attempt ${attempt} failed: ${error.message}. Retrying in ${waitTime}ms...`,
       );
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
@@ -88,7 +89,10 @@ async function withRetry<T>(
 // ==========================================
 export const createVideoProcessor = (redisClient: Redis) => {
   console.log("inside create video processor ");
-  return async (job: Job<TranscodeJobPayload>, token?: string): Promise<void> => {
+  return async (
+    job: Job<TranscodeJobPayload>,
+    token?: string,
+  ): Promise<void> => {
     const { lessonId, tenantId, s3Key } = job.data;
     // GLOBAL CONCURRENCY CHECK
     const slot = await redisClient.decr(REDIS_SLOTS_KEY);
@@ -111,15 +115,17 @@ export const createVideoProcessor = (redisClient: Redis) => {
       const s3Data = await s3Client.send(
         new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key }),
       );
-      
+
       const writeStream = fs.createWriteStream(inputPath);
       await pipeline(s3Data.Body as any, writeStream);
 
       const stats = fs.statSync(inputPath);
       console.log(`[${lessonId}] Downloaded file size: ${stats.size} bytes`);
 
-      if (stats.size === 0) throw new Error("Downloaded file is empty (0 bytes)");
-      if (stats.size < 1000) console.warn(`WARNING: File is small (${stats.size} bytes)`);
+      if (stats.size === 0)
+        throw new Error("Downloaded file is empty (0 bytes)");
+      if (stats.size < 1000)
+        console.warn(`WARNING: File is small (${stats.size} bytes)`);
 
       console.log(`[${lessonId}] Running ffprobe to get video metadata...`);
       const duration = await getDuration(inputPath);
@@ -142,8 +148,8 @@ export const createVideoProcessor = (redisClient: Redis) => {
               "-preset veryfast",
               `-s ${res.size}`,
               `-b:v ${res.bitrate}`,
-              "-c:a copy", 
-              "-movflags +faststart", 
+              "-c:a copy",
+              "-movflags +faststart",
             ])
             .output(`${outputDir}/${res.name}.mp4`)
             .on("end", () => resolve())
@@ -182,16 +188,19 @@ export const createVideoProcessor = (redisClient: Redis) => {
                   "x-internal-secret": process.env.INTERNAL_VIDEO_SECRET,
                   "Content-Type": "application/json",
                 },
-                timeout: 30000, 
+                timeout: 30000,
               },
             ),
-          3, 
-          2000, 
-          `${lessonId} callback`
+          3,
+          2000,
+          `${lessonId} callback`,
         );
         console.log(`[${lessonId}] Callback successful:`, response.data);
       } catch (callbackError: any) {
-        console.error(`[${lessonId}] Callback failed:`, callbackError.response?.data);
+        console.error(
+          `[${lessonId}] Callback failed:`,
+          callbackError.response?.data,
+        );
         throw callbackError;
       }
 
@@ -212,7 +221,8 @@ export const createVideoProcessor = (redisClient: Redis) => {
       throw err;
     } finally {
       await redisClient.incr(REDIS_SLOTS_KEY);
-      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+      if (fs.existsSync(tempDir))
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
   };
 };
@@ -220,14 +230,21 @@ export const createVideoProcessor = (redisClient: Redis) => {
 async function uploadDirectoryToS3(
   localPath: string,
   s3Prefix: string,
-): Promise<Array<{ resolution: string; url: string; size: number; bitrate: number }>> {
+): Promise<
+  Array<{ resolution: string; url: string; size: number; bitrate: number }>
+> {
   const entries = fs.readdirSync(localPath, { withFileTypes: true });
-  const variants: Array<{ resolution: string; url: string; size: number; bitrate: number }> = [];
+  const variants: Array<{
+    resolution: string;
+    url: string;
+    size: number;
+    bitrate: number;
+  }> = [];
 
   const bitrateMap: Record<string, number> = {
-    "1080p.mp4": 5000000, 
-    "720p.mp4": 2800000, 
-    "480p.mp4": 1400000, 
+    "1080p.mp4": 5000000,
+    "720p.mp4": 2800000,
+    "480p.mp4": 1400000,
   };
 
   const uploadPromises: Promise<any>[] = [];
@@ -240,7 +257,7 @@ async function uploadDirectoryToS3(
       uploadPromises.push(
         uploadDirectoryToS3(fullPath, s3Key).then((subVariants) => {
           variants.push(...subVariants);
-        })
+        }),
       );
     } else {
       const stats = fs.statSync(fullPath);
@@ -261,7 +278,7 @@ async function uploadDirectoryToS3(
             Body: fs.createReadStream(fullPath),
             ContentType: "video/mp4",
           }),
-        )
+        ),
       );
     }
   }
@@ -275,7 +292,10 @@ async function uploadDirectoryToS3(
 // ==========================================
 export const createDrmVideoProcessor = (redisClient: Redis) => {
   console.log(`IN DRM_PROCESSOR Creating DRM video processor...`);
-  return async (job: Job<TranscodeJobPayload>, token?: string): Promise<void> => {
+  return async (
+    job: Job<TranscodeJobPayload>,
+    token?: string,
+  ): Promise<void> => {
     const { lessonId, tenantId, s3Key, drmKeyId, contentKey } = job.data;
 
     const slot = await redisClient.decr(REDIS_SLOTS_KEY);
@@ -296,20 +316,24 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
       const s3Data = await s3Client.send(
         new GetObjectCommand({ Bucket: BUCKET_NAME, Key: s3Key }),
       );
-      
+
       const writeStream = fs.createWriteStream(inputPath);
       await pipeline(s3Data.Body as any, writeStream);
 
       const stats = fs.statSync(inputPath);
       console.log(`[${lessonId}] Downloaded file size: ${stats.size} bytes`);
 
-      if (stats.size === 0) throw new Error("Downloaded file is empty (0 bytes)");
-      if (stats.size < 1000) console.warn(`WARNING: File is small (${stats.size} bytes)`);
+      if (stats.size === 0)
+        throw new Error("Downloaded file is empty (0 bytes)");
+      if (stats.size < 1000)
+        console.warn(`WARNING: File is small (${stats.size} bytes)`);
 
       const duration = await getDuration(inputPath);
 
-      console.log(`[${lessonId}] Stage 1: Transcoding Video & Audio to fMP4 in Parallel...`);
-      
+      console.log(
+        `[${lessonId}] Stage 1: Transcoding Video & Audio to fMP4 in Parallel...`,
+      );
+
       // Check if video has audio stream
       const videoHasAudio = await hasAudioStream(inputPath);
       console.log(`[${lessonId}] Video has audio: ${videoHasAudio}`);
@@ -320,53 +344,75 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
         { name: "480p", size: "854x480", bitrate: "1400k" },
       ];
 
-      const videoPromises = resolutions.map((res) => {
-        return new Promise<void>((resolve, reject) => {
-          ffmpeg(inputPath)
-            .outputOptions([
-              "-threads 2", // 4 parallel processes on 8 vCPU — 2 threads each
-              "-preset veryfast",
-              `-s ${res.size}`,
-              `-b:v ${res.bitrate}`,
-              "-an", 
-              "-keyint_min 48",
-              "-g 48",
-              "-sc_threshold 0",
-              "-movflags frag_keyframe+empty_moov+default_base_moof",
-            ])
-            .output(`${outputDir}/${res.name}_raw.mp4`)
-            .on("end", () => resolve())
-            .on("error", reject)
-            .run();
-        });
-      });
-
-      // Only process audio if it exists, otherwise create silent audio
-      const audioPromise = new Promise<void>((resolve, reject) => {
+      // Single ffmpeg process reads the input file ONCE and produces all outputs.
+      // Previously, 4 parallel ffmpeg processes all read the same large file
+      // simultaneously, causing massive I/O contention on ECS and making ffmpeg
+      // die with exit code 234 (EINVAL / buffer overflow) for files >= ~400MB.
+      await new Promise<void>((resolve, reject) => {
         if (videoHasAudio) {
-          // Extract existing audio
-          ffmpeg(inputPath)
+          // Input file read once → 3 video tracks + 1 audio track
+          const cmd = ffmpeg(inputPath).inputOptions(["-threads 4"]);
+
+          resolutions.forEach((res) => {
+            cmd
+              .output(`${outputDir}/${res.name}_raw.mp4`)
+              .outputOptions([
+                "-c:v libx264",
+                "-preset veryfast",
+                `-vf scale=${res.size}`,
+                `-b:v ${res.bitrate}`,
+                "-an",
+                "-keyint_min 48",
+                "-g 48",
+                "-sc_threshold 0",
+                "-movflags frag_keyframe+empty_moov+default_base_moof",
+              ]);
+          });
+
+          cmd
+            .output(`${outputDir}/audio_raw.mp4`)
             .outputOptions([
-              "-threads 2",
-              "-vn", 
+              "-vn",
               "-c:a aac",
               "-b:a 128k",
-              "-movflags frag_keyframe+empty_moov+default_base_moof"
-            ])
-            .output(`${outputDir}/audio_raw.mp4`)
-            .on("end", () => resolve())
+              "-movflags frag_keyframe+empty_moov+default_base_moof",
+            ]);
+
+          cmd.on("end", () => resolve()).on("error", reject).run();
+        } else {
+          // No audio in source — transcode video only, then generate silent audio separately
+          const cmd = ffmpeg(inputPath).inputOptions(["-threads 4"]);
+
+          resolutions.forEach((res) => {
+            cmd
+              .output(`${outputDir}/${res.name}_raw.mp4`)
+              .outputOptions([
+                "-c:v libx264",
+                "-preset veryfast",
+                `-vf scale=${res.size}`,
+                `-b:v ${res.bitrate}`,
+                "-an",
+                "-keyint_min 48",
+                "-g 48",
+                "-sc_threshold 0",
+                "-movflags frag_keyframe+empty_moov+default_base_moof",
+              ]);
+          });
+
+          cmd
+            .on("end", async () => {
+              try {
+                const silentAudioCmd = `ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 0.1 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof "${outputDir}/audio_raw.mp4"`;
+                await execPromise(silentAudioCmd);
+                resolve();
+              } catch (e) {
+                reject(e);
+              }
+            })
             .on("error", reject)
             .run();
-        } else {
-          // Create silent audio track using ffmpeg directly
-          const silentAudioCmd = `ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 0.1 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof "${outputDir}/audio_raw.mp4"`;
-          execPromise(silentAudioCmd)
-            .then(() => resolve())
-            .catch(reject);
         }
       });
-
-      await Promise.all([...videoPromises, audioPromise]);
 
       if (fs.existsSync(inputPath)) {
         fs.unlinkSync(inputPath);
@@ -389,7 +435,7 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
         "--protection_systems Widevine,PlayReady",
         `--mpd_output ${outputDir}/manifest.mpd`,
         `--hls_master_playlist_output ${outputDir}/master.m3u8`,
-        "--clear_lead 0", 
+        "--clear_lead 0",
       ].join(" ");
 
       await execPromise(shakaCmd, { maxBuffer: 1024 * 1024 * 50 });
@@ -418,7 +464,7 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
         masterUrl: masterPlaylistKey,
         thumbnailUrl: "",
         duration,
-        variants: [], 
+        variants: [],
         isDrm: true,
         dashManifestUrl: dashManifestKey,
       };
@@ -434,12 +480,12 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
                   "x-internal-secret": process.env.INTERNAL_VIDEO_SECRET,
                   "Content-Type": "application/json",
                 },
-                timeout: 30000, 
+                timeout: 30000,
               },
             ),
-          3, 
-          2000, 
-          `${lessonId} DRM callback`
+          3,
+          2000,
+          `${lessonId} DRM callback`,
         );
         console.log(`[${lessonId}] Callback successful:`, response.data);
       } catch (callbackError: any) {
@@ -467,7 +513,8 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
       throw err;
     } finally {
       await redisClient.incr(REDIS_SLOTS_KEY);
-      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+      if (fs.existsSync(tempDir))
+        fs.rmSync(tempDir, { recursive: true, force: true });
     }
   };
 };
@@ -497,7 +544,7 @@ async function uploadDrmDirectoryToS3(
       uploadPromises.push(
         uploadDrmDirectoryToS3(fullPath, s3Key).then((files) => {
           uploadedFiles.push(...files);
-        })
+        }),
       );
     } else {
       const ext = path.extname(entry.name).toLowerCase();
