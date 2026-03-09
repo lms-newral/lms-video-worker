@@ -344,75 +344,52 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
         { name: "480p", size: "854x480", bitrate: "1400k" },
       ];
 
-      // Single ffmpeg process reads the input file ONCE and produces all outputs.
-      // Previously, 4 parallel ffmpeg processes all read the same large file
-      // simultaneously, causing massive I/O contention on ECS and making ffmpeg
-      // die with exit code 234 (EINVAL / buffer overflow) for files >= ~400MB.
-      await new Promise<void>((resolve, reject) => {
-        if (videoHasAudio) {
-          // Input file read once → 3 video tracks + 1 audio track
-          const cmd = ffmpeg(inputPath).inputOptions(["-threads 4"]);
+      // Single ffmpeg pass: input is decoded ONCE, split into 3 video resolutions
+      // + audio via filter_complex. This avoids:
+      //   1. Multiple processes reading the same large file (old issue — I/O contention)
+      //   2. Per-output -vf in fluent-ffmpeg multi-output mode, which generates
+      //      an invalid filterchain and causes ffmpeg AVERROR(EINVAL) exit code 234
+      //      at the very end of a long encode (new issue after first fix).
+      // Using execPromise with a raw ffmpeg command gives full control over the
+      // filter_complex graph and avoids all fluent-ffmpeg multi-output quirks.
+      const fmpegFlags =
+        "-movflags frag_keyframe+empty_moov+default_base_moof";
+      const videoEncodeOpts =
+        "-c:v libx264 -preset veryfast -keyint_min 48 -g 48 -sc_threshold 0";
 
-          resolutions.forEach((res) => {
-            cmd
-              .output(`${outputDir}/${res.name}_raw.mp4`)
-              .outputOptions([
-                "-c:v libx264",
-                "-preset veryfast",
-                `-vf scale=${res.size}`,
-                `-b:v ${res.bitrate}`,
-                "-an",
-                "-keyint_min 48",
-                "-g 48",
-                "-sc_threshold 0",
-                "-movflags frag_keyframe+empty_moov+default_base_moof",
-              ]);
-          });
+      let transcodeCmd: string;
 
-          cmd
-            .output(`${outputDir}/audio_raw.mp4`)
-            .outputOptions([
-              "-vn",
-              "-c:a aac",
-              "-b:a 128k",
-              "-movflags frag_keyframe+empty_moov+default_base_moof",
-            ]);
+      if (videoHasAudio) {
+        transcodeCmd = [
+          "ffmpeg -y",
+          // 8 CPUs available, BullMQ concurrency=1 → only 1 job per ECS task at a time.
+          // Use 6 threads: leaves 2 CPUs headroom for Node.js process + OS.
+          `-threads 6 -i "${inputPath}"`,
+          `-filter_complex "[0:v]split=3[v1][v2][v3];[v1]scale=1920:1080[out1];[v2]scale=1280:720[out2];[v3]scale=854:480[out3]"`,
+          `-map "[out1]" ${videoEncodeOpts} -b:v 5000k -an ${fmpegFlags} "${outputDir}/1080p_raw.mp4"`,
+          `-map "[out2]" ${videoEncodeOpts} -b:v 2800k -an ${fmpegFlags} "${outputDir}/720p_raw.mp4"`,
+          `-map "[out3]" ${videoEncodeOpts} -b:v 1400k -an ${fmpegFlags} "${outputDir}/480p_raw.mp4"`,
+          `-map 0:a -vn -c:a aac -b:a 128k ${fmpegFlags} "${outputDir}/audio_raw.mp4"`,
+        ].join(" \\\n  ");
+      } else {
+        // No audio in source — transcode video only in one pass, generate silent audio after
+        transcodeCmd = [
+          "ffmpeg -y",
+          `-threads 6 -i "${inputPath}"`,
+          `-filter_complex "[0:v]split=3[v1][v2][v3];[v1]scale=1920:1080[out1];[v2]scale=1280:720[out2];[v3]scale=854:480[out3]"`,
+          `-map "[out1]" ${videoEncodeOpts} -b:v 5000k -an ${fmpegFlags} "${outputDir}/1080p_raw.mp4"`,
+          `-map "[out2]" ${videoEncodeOpts} -b:v 2800k -an ${fmpegFlags} "${outputDir}/720p_raw.mp4"`,
+          `-map "[out3]" ${videoEncodeOpts} -b:v 1400k -an ${fmpegFlags} "${outputDir}/480p_raw.mp4"`,
+        ].join(" \\\n  ");
+      }
 
-          cmd.on("end", () => resolve()).on("error", reject).run();
-        } else {
-          // No audio in source — transcode video only, then generate silent audio separately
-          const cmd = ffmpeg(inputPath).inputOptions(["-threads 4"]);
+      console.log(`[${lessonId}] Running ffmpeg transcode command...`);
+      await execPromise(transcodeCmd, { maxBuffer: 1024 * 1024 * 50 });
 
-          resolutions.forEach((res) => {
-            cmd
-              .output(`${outputDir}/${res.name}_raw.mp4`)
-              .outputOptions([
-                "-c:v libx264",
-                "-preset veryfast",
-                `-vf scale=${res.size}`,
-                `-b:v ${res.bitrate}`,
-                "-an",
-                "-keyint_min 48",
-                "-g 48",
-                "-sc_threshold 0",
-                "-movflags frag_keyframe+empty_moov+default_base_moof",
-              ]);
-          });
-
-          cmd
-            .on("end", async () => {
-              try {
-                const silentAudioCmd = `ffmpeg -f lavfi -i "anullsrc=r=44100:cl=mono" -t 0.1 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof "${outputDir}/audio_raw.mp4"`;
-                await execPromise(silentAudioCmd);
-                resolve();
-              } catch (e) {
-                reject(e);
-              }
-            })
-            .on("error", reject)
-            .run();
-        }
-      });
+      if (!videoHasAudio) {
+        const silentAudioCmd = `ffmpeg -y -f lavfi -i "anullsrc=r=44100:cl=mono" -t 0.1 -c:a aac -b:a 128k ${fmpegFlags} "${outputDir}/audio_raw.mp4"`;
+        await execPromise(silentAudioCmd);
+      }
 
       if (fs.existsSync(inputPath)) {
         fs.unlinkSync(inputPath);
