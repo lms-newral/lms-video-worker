@@ -364,12 +364,17 @@ export const createDrmVideoProcessor = (redisClient: Redis) => {
           "ffmpeg -y",
           // 8 CPUs available, BullMQ concurrency=1 → only 1 job per ECS task at a time.
           // Use 6 threads: leaves 2 CPUs headroom for Node.js process + OS.
-          `-threads 6 -i "${inputPath}"`,
+          // -err_detect ignore_err: tolerate corrupted/non-compliant input packets
+          // (e.g. malformed AAC that causes the decoder to report garbage channel counts)
+          `-threads 6 -err_detect ignore_err -i "${inputPath}"`,
           `-filter_complex "[0:v]split=3[v1][v2][v3];[v1]scale=1920:1080[out1];[v2]scale=1280:720[out2];[v3]scale=854:480[out3]"`,
           `-map "[out1]" ${videoEncodeOpts} -b:v 5000k -an ${fmpegFlags} "${outputDir}/1080p_raw.mp4"`,
           `-map "[out2]" ${videoEncodeOpts} -b:v 2800k -an ${fmpegFlags} "${outputDir}/720p_raw.mp4"`,
           `-map "[out3]" ${videoEncodeOpts} -b:v 1400k -an ${fmpegFlags} "${outputDir}/480p_raw.mp4"`,
-          `-map 0:a -vn -c:a aac -b:a 128k ${fmpegFlags} "${outputDir}/audio_raw.mp4"`,
+          // -ac 2 -ar 44100: force stereo 44100 Hz output regardless of what the
+          // corrupt input stream claims (e.g. 11 channels), preventing libswresample
+          // from failing with EINVAL when it has no downmix matrix for that channel count
+          `-map 0:a -vn -c:a aac -ac 2 -ar 44100 -b:a 128k ${fmpegFlags} "${outputDir}/audio_raw.mp4"`,
         ].join(" \\\n  ");
       } else {
         // No audio in source — transcode video only in one pass, generate silent audio after
